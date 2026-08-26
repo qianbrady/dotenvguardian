@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EnvGuardian — .env vs .env.example checker &amp; config audit</title>
+<meta name="description" content="Free offline .env checker: diff .env against .env.example (missing/extra/empty variables), or paste code to find undocumented, zombie and no-default environment reads with a 0-100 health score.">
+<style>
+:root{--bg:#0d1117;--card:#161b22;--border:#30363d;--fg:#e6edf3;--muted:#8b949e;--green:#3fb950;--red:#f85149;--amber:#d29922;--accent:#39d2c0}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:-apple-system,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;line-height:1.5;padding:22px}
+.wrap{max-width:1040px;margin:0 auto}
+h1{font-size:25px}h1 .c{color:var(--accent)}
+.tag{color:var(--muted);font-size:13.5px;margin-top:4px}
+.tabs{display:flex;gap:8px;margin-top:16px}
+.tab{padding:8px 18px;border-radius:6px 6px 0 0;border:1px solid var(--border);border-bottom:none;background:var(--card);cursor:pointer;font-size:13.5px;color:var(--muted)}
+.tab.on{color:var(--fg);border-bottom:1px solid var(--bg)}
+label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:5px}
+textarea{width:100%;height:170px;background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:12px;font:12.5px/1.55 ui-monospace,Consolas,monospace;resize:vertical}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.btnrow{display:flex;gap:10px;margin-top:14px}
+button.primary{background:#1a7f64;color:#fff;border:none;border-radius:6px;padding:10px 20px;font-weight:600;cursor:pointer;font-size:14px}
+button.ghost{background:transparent;color:var(--accent);border:1px solid var(--border);border-radius:6px;padding:9px 14px;cursor:pointer;font-size:13px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;margin-top:16px;padding:16px}
+.hidden{display:none}
+h2{font-size:15px;margin-bottom:8px}
+ul.plain{list-style:none;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+ul.plain li{padding:4px 0;border-bottom:1px solid var(--border)}
+.miss{color:var(--red)}.extra{color:var(--amber)}.ok{color:var(--green)}.empty-v{color:var(--muted)}
+.score-row{display:flex;align-items:center;gap:24px;flex-wrap:wrap}
+.bignum{font-size:46px;font-weight:700}
+.pill{display:inline-block;border-radius:999px;padding:3px 12px;font-size:12.5px;font-weight:600}
+.warnbox{margin-top:12px;padding:9px 12px;border-radius:6px;background:rgba(210,153,34,.1);color:var(--amber);font-size:12.5px}
+code{background:#21262d;border-radius:4px;padding:1px 6px;font-size:12px}
+footer{margin-top:20px;color:var(--muted);font-size:12px;text-align:center}
+footer a{color:var(--accent)}
+select{background:var(--card);border:1px solid var(--border);color:var(--fg);border-radius:6px;padding:8px 10px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Env<span class="c">Guardian</span></h1>
+<div class="tag">Stop shipping broken configs. Diff <code>.env</code> against <code>.env.example</code>, or audit pasted code for undocumented / zombie / no-default variable reads. Offline port of <a href="https://github.com/qianbrady/dotenvelope" style="color:var(--accent)">dotenvelope</a>.</div>
+
+<div class="tabs">
+  <div class="tab on" id="tabDiff" onclick="showTab('diff')">① .env ↔ .env.example diff</div>
+  <div class="tab" id="tabAudit" onclick="showTab('audit')">② Code audit + health score</div>
+</div>
+
+<div id="paneDiff">
+  <div class="grid2" style="margin-top:14px">
+    <div><label>.env (actual values)</label><textarea id="envText" placeholder="DATABASE_URL=postgres://…&#10;API_KEY=sk-…&#10;CACHE_TTL="></textarea></div>
+    <div><label>.env.example (documented contract)</label><textarea id="exText" placeholder="# copy to .env and fill in&#10;DATABASE_URL=&#10;API_KEY=&#10;CACHE_TTL=60&#10;FEATURE_FLAG=true"></textarea></div>
+  </div>
+  <div class="btnrow"><button class="primary" onclick="runDiff()">Compare</button><button class="ghost" onclick="loadDiffExample()">Load example</button></div>
+  <div class="card hidden" id="diffOut"></div>
+</div>
+
+<div id="paneAudit" class="hidden">
+  <div class="grid2" style="margin-top:14px">
+    <div><label>.env.example (optional)</label><textarea id="aEx" placeholder="DATABASE_URL=&#10;CACHE_TTL=60"></textarea></div>
+    <div><label>Code (language:</label-labeled><select id="lang" style="margin-bottom:5px"><option value="js">JavaScript / TypeScript</option><option value="py">Python</option></select>)
+      <textarea id="code" placeholder="const db = process.env.DATABASE_URL;&#10;const ttl = process.env.CACHE_TTL ?? 30;"></textarea></div>
+  </div>
+  <div class="btnrow"><button class="primary" onclick="runAudit()">Audit</button><button class="ghost" onclick="loadAuditExample()">Load example</button></div>
+  <div class="card hidden" id="auditOut"></div>
+</div>
+
+<footer>Ported from dotenvelope v1.x — same parser grammar, same penalties (-12 undocumented · -4 zombie · -6 risky), same clamped 0-100 score. Note: web audit scans code by regex (the CLI's fallback path); Python AST precision is CLI-only. © 2025 MIT</footer>
+</div>
+
+<script>
+"use strict";
+/* ---- ported from dotenvelope/envfile.py ---- */
+function parseDotenv(text){
+  if(text.startsWith("\ufeff"))text=text.slice(1);
+  const entries=[];
+  const lines=text.split(/\r?\n/);
+  lines.forEach((raw,idx)=>{
+    let line=raw.trim();
+    if(!line||line.startsWith("#"))return;
+    if(line.startsWith("export "))line=line.slice(7).replace(/^\s+/,"");
+    if(!line.includes("="))return;
+    const eq=line.indexOf("=");
+    let key=line.slice(0,eq).trim();
+    if(!key)return;
+    let value=line.slice(eq+1).trim();
+    if(value.length>=2&&(value[0]==="'"||value[0]==='"')&&value[value.length-1]===value[0])
+      value=value.slice(1,-1);
+    entries.push({key,value,line:idx+1});});
+  return entries;}
+function orderedKeys(entries){
+  const seen=new Set();const out=[];
+  for(const e of entries)if(!seen.has(e.key)){seen.add(e.key);out.push(e.key);}
+  return out;}
+function asMap(entries){
+  const out={};for(const e of entries)out[e.key]=e.value;return out;}
+
+/* ---- ported from dotenvelope/scanner.py (regex path) ---- */
+const PY_RE=[
+ {name:"os.environ.get",re:/os\.environ\.get\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"](\s*,\s*[^)]*)?\s*\)/g},
+ {name:"os.getenv",re:/os\.getenv\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"](\s*,\s*[^)]*)?\s*\)/g},
+ {name:"os.environ[...]",re:/os\.environ\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\]/g}];
+const JS_RE=[
+ {name:"process.env.X",re:/process\.env\.([A-Za-z_$][A-Za-z0-9_$]*)/g},
+ {name:"process.env['X']",re:/process\.env\[\s*['"]([A-Za-z_$][A-Za-z0-9_$]*)['"]\s*\]/g}];
+function blankJsComments(text){
+  const chars=[...text];const n=chars.length;let i=0;
+  while(i<n){
+    if(chars[i]==="/"&&i+1<n){
+      if(chars[i+1]==="/"){chars[i]=chars[i+1]=" ";i+=2;
+        while(i<n&&chars[i]!=="\n"&&chars[i]!=="\r"){chars[i]=" ";i++;}}
+      else if(chars[i+1]==="*"){chars[i]=chars[i+1]=" ";i+=2;
+        while(i<n){if(chars[i]==="*"&&i+1<n&&chars[i+1]==="/"){chars[i]=chars[i+1]=" ";i+=2;break;}
+          if(chars[i]!=="\n"&&chars[i]!=="\r")chars[i]=" ";i+=1;}}
+      else i++;}
+    else i++;}
+  return chars.join("");}
+function lineOf(text,index){return text.slice(0,index).split("\n").length;}
+const FALLBACK_RE=/\s*(\?\?|\|\|)/;
+function scanCode(text,lang){
+  // lang: "js" | "py"(regex fallback path, as documented)
+  const isPy=lang==="py";
+  const masked=isPy?text:blankJsComments(text);
+  const patterns=isPy?PY_RE:JS_RE;
+  const byVar={};
+  for(const {name,re} of patterns){
+    re.lastIndex=0;
+    let m;
+    while((m=re.exec(masked))!==null){
+      const vari=m[1];
+      let hasDefault;
+      if(isPy)hasDefault=name!=="os.environ[...]"&&m[2]!==undefined;
+      else hasDefault=FALLBACK_RE.test(masked.slice(m.index+m[0].length,m.index+m[0].length+8))&&(/^\s*(\?\?|\|\|)/.test(masked.slice(m.index+m[0].length)));
+      (byVar[vari]=byVar[vari]||[]).push({pattern:name,line:lineOf(masked,m.index),hasDefault});}}
+  return byVar;}
+
+/* ---- ported from dotenvelope/audit.py ---- */
+const PENALTY={undocumented:12,zombie:4,risky:6};
+function healthScore(nUnd,nZom,nRisky){
+  return Math.max(0,Math.min(100,100-PENALTY.undocumented*nUnd-PENALTY.zombie*nZom-PENALTY.risky*nRisky));}
+
+/* ---- UI ---- */
+let MODE="diff";
+function showTab(m){
+  MODE=m;
+  document.getElementById("tabDiff").className="tab"+(m==="diff"?" on":"");
+  document.getElementById("tabAudit").className="tab"+(m==="audit"?" on":"");
+  document.getElementById("paneDiff").classList.toggle("hidden",m!=="diff");
+  document.getElementById("paneAudit").classList.toggle("hidden",m!=="audit");}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function li(cls,txt){return `<li class="${cls}">${esc(txt)}</li>`;}
+function runDiff(){
+  const env=asMap(parseDotenv(document.getElementById("envText").value));
+  const exEntries=parseDotenv(document.getElementById("exText").value);
+  const exKeys=orderedKeys(exEntries);
+  const exMap=asMap(exEntries);
+  const out=document.getElementById("diffOut");out.classList.remove("hidden");
+  const missing=exKeys.filter(k=>!(k in env));
+  const envKeys=Object.keys(env);
+  const extras=envKeys.filter(k=>!(k in exMap));
+  const empties=envKeys.filter(k=>k in exMap&&env[k]==="");
+  const dupesInEx=exEntries.length-exKeys.length;
+  let h=`<h2>${missing.length} missing · ${extras.length} extra · ${empties.length} empty${dupesInEx>0?` · ${dupesInEx} duplicate key(s) in example`:''}</h2>`;
+  if(!missing.length&&!extras.length&&!empties.length&&dupesInEx===0)
+    h+=`<p class="ok">✓ ${envKeys.length} variable(s) all match the documented contract.</p>`;
+  else{
+    h+="<ul class='plain'>";
+    missing.forEach(k=>h+=li("miss","MISSING in .env: "+k+" (documented in example)"));
+    extras.forEach(k=>h+=li("extra","EXTRA in .env: "+k+" (not documented in example)"));
+    empties.forEach(k=>h+=li("empty-v","EMPTY value: "+k));
+    h+="</ul>";}
+  out.innerHTML=h;}
+function runAudit(){
+  const code=document.getElementById("code").value;
+  const lang=document.getElementById("lang").value;
+  const exText=document.getElementById("aEx").value;
+  const byVar=scanCode(code,lang);
+  const docSet=new Set(orderedKeys(parseDotenv(exText)));
+  const vars=Object.keys(byVar).sort();
+  const undocumented=vars.filter(v=>!docSet.has(v));
+  const zombie=[...docSet].filter(k=>!byVar[k]);
+  const risky=vars.filter(v=>!byVar[v].every(o=>o.hasDefault));
+  const score=healthScore(undocumented.length,zombie.length,risky.length);
+  const out=document.getElementById("auditOut");out.classList.remove("hidden");
+  const cls=score>=80?"ok":score>=50?"warn":"bad";
+  let h=`<div class="score-row"><div><div class="bignum" style="color:var(--${cls})">${score}</div><div style="color:var(--muted);font-size:12px">health score</div></div>
+    <div><span class="pill ${cls}">${undocumented.length} undocumented · ${zombie.length} zombie · ${risky.length} no-default</span></div></div>`;
+  const sec=(title,arr,hint)=>`<h2 style="margin-top:14px">${title} (${arr.length})</h2>`+
+    (arr.length?`<ul class='plain'>${arr.map(v=>li("",v+(hint?" — "+hint:""))).join("")}</ul>`:`<p class="ok">（none）</p>`);
+  h+=sec("Undocumented — read in code, absent from example",undocumented,"add it to .env.example");
+  h+=sec("Zombie — documented but never read",zombie,"remove from .env.example or start using it");
+  h+=sec("No default — crash/undefined risk if unset",risky,"add ?? fallback / getenv second arg");
+  if(lang==="py")h+=`<div class="warnbox">⚠ Web audit uses the regex scan path (CLI uses Python AST for higher precision). Treat results as advisory.</div>`;
+  out.innerHTML=h;}
+function loadDiffExample(){
+  document.getElementById("envText").value="DATABASE_URL=postgres://localhost/app\nAPI_KEY=\nLEGACY_FLAG=true";
+  document.getElementById("exText").value="# required\nDATABASE_URL=\nAPI_KEY=\nCACHE_TTL=60\nFEATURE_FLAG=true";
+  runDiff();}
+function loadAuditExample(){
+  document.getElementById("lang").value="js";
+  document.getElementById("aEx").value="DATABASE_URL=\nCACHE_TTL=60";
+  document.getElementById("code").value="// reads config\nconst db = process.env.DATABASE_URL;\nconst ttl = process.env.CACHE_TTL ?? 30;\nconst secret = process.env.SECRET_KEY;\nconst region = process.env.AWS_REGION || 'us-east-1';";
+  runAudit();}
+</script>
+</body>
+</html>
