@@ -59,7 +59,7 @@ select{background:var(--card);border:1px solid var(--border);color:var(--fg);bor
 <div id="paneAudit" class="hidden">
   <div class="grid2" style="margin-top:14px">
     <div><label>.env.example (optional)</label><textarea id="aEx" placeholder="DATABASE_URL=&#10;CACHE_TTL=60"></textarea></div>
-    <div><label>Code (language:</label-labeled><select id="lang" style="margin-bottom:5px"><option value="js">JavaScript / TypeScript</option><option value="py">Python</option></select>)
+    <div><label>Code (language: <select id="lang" style="margin-bottom:5px"><option value="js">JavaScript / TypeScript</option><option value="py">Python</option></select>)</label>
       <textarea id="code" placeholder="const db = process.env.DATABASE_URL;&#10;const ttl = process.env.CACHE_TTL ?? 30;"></textarea></div>
   </div>
   <div class="btnrow"><button class="primary" onclick="runAudit()">Audit</button><button class="ghost" onclick="loadAuditExample()">Load example</button></div>
@@ -131,7 +131,7 @@ function scanCode(text,lang){
       const vari=m[1];
       let hasDefault;
       if(isPy)hasDefault=name!=="os.environ[...]"&&m[2]!==undefined;
-      else hasDefault=FALLBACK_RE.test(masked.slice(m.index+m[0].length,m.index+m[0].length+8))&&(/^\s*(\?\?|\|\|)/.test(masked.slice(m.index+m[0].length)));
+      else hasDefault=/^\s*(\?\?|\|\|)/.test(masked.slice(m.index+m[0].length));
       (byVar[vari]=byVar[vari]||[]).push({pattern:name,line:lineOf(masked,m.index),hasDefault});}}
   return byVar;}
 
@@ -151,10 +151,13 @@ function showTab(m){
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function li(cls,txt){return `<li class="${cls}">${esc(txt)}</li>`;}
 function runDiff(){
-  const env=asMap(parseDotenv(document.getElementById("envText").value));
+  if(!document.getElementById("envText").value.trim()&&!document.getElementById("exText").value.trim()){
+    const out=document.getElementById("diffOut");out.classList.remove("hidden");
+    out.innerHTML='<p class="warnbox">Paste at least one side (.env or .env.example) to compare.</p>';return;}
+  const env=Object.assign(Object.create(null),asMap(parseDotenv(document.getElementById("envText").value)));
   const exEntries=parseDotenv(document.getElementById("exText").value);
   const exKeys=orderedKeys(exEntries);
-  const exMap=asMap(exEntries);
+  const exMap=Object.assign(Object.create(null),asMap(exEntries));
   const out=document.getElementById("diffOut");out.classList.remove("hidden");
   const missing=exKeys.filter(k=>!(k in env));
   const envKeys=Object.keys(env);
@@ -173,9 +176,12 @@ function runDiff(){
   out.innerHTML=h;}
 function runAudit(){
   const code=document.getElementById("code").value;
+  if(!code.trim()&&!document.getElementById("aEx").value.trim()){
+    const out=document.getElementById("auditOut");out.classList.remove("hidden");
+    out.innerHTML='<p class="warnbox">Paste code to audit (an optional .env.example enables undocumented/zombie checks).</p>';return;}
   const lang=document.getElementById("lang").value;
   const exText=document.getElementById("aEx").value;
-  const byVar=scanCode(code,lang);
+  const bv0=scanCode(code,lang);const byVar=Object.assign(Object.create(null),bv0);
   const docSet=new Set(orderedKeys(parseDotenv(exText)));
   const vars=Object.keys(byVar).sort();
   const undocumented=vars.filter(v=>!docSet.has(v));
@@ -187,7 +193,7 @@ function runAudit(){
   let h=`<div class="score-row"><div><div class="bignum" style="color:var(--${cls})">${score}</div><div style="color:var(--muted);font-size:12px">health score</div></div>
     <div><span class="pill ${cls}">${undocumented.length} undocumented · ${zombie.length} zombie · ${risky.length} no-default</span></div></div>`;
   const sec=(title,arr,hint)=>`<h2 style="margin-top:14px">${title} (${arr.length})</h2>`+
-    (arr.length?`<ul class='plain'>${arr.map(v=>li("",v+(hint?" — "+hint:""))).join("")}</ul>`:`<p class="ok">（none）</p>`);
+    (arr.length?`<ul class='plain'>${arr.map(v=>li("",v+(hint?" — "+hint:""))).join("")}</ul>`:`<p class="ok">(none)</p>`);
   h+=sec("Undocumented — read in code, absent from example",undocumented,"add it to .env.example");
   h+=sec("Zombie — documented but never read",zombie,"remove from .env.example or start using it");
   h+=sec("No default — crash/undefined risk if unset",risky,"add ?? fallback / getenv second arg");
